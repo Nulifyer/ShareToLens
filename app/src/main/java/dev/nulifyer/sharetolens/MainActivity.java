@@ -2,16 +2,20 @@ package dev.nulifyer.sharetolens;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ContentValues;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ContentResolver;
+import android.content.res.AssetFileDescriptor;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -38,8 +42,6 @@ import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
 import java.io.BufferedOutputStream;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -58,11 +60,15 @@ import java.util.concurrent.Executors;
 @SuppressWarnings("deprecation")
 public final class MainActivity extends Activity {
     private static final String TAG = "ShareToLens";
+    private static final String KEY_PENDING_CAMERA_URI = "pending_camera_uri";
     private static final String LENS_V3_URL = "https://lens.google.com/v3/upload";
+    private static final URI LENS_BASE_URI = URI.create("https://lens.google.com/");
     private static final int REQUEST_PICK_IMAGE = 1;
     private static final int REQUEST_TAKE_PHOTO = 2;
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int READ_TIMEOUT_MS = 30_000;
+    private static final int UPLOAD_BUFFER_SIZE = 64 * 1024;
+    private static final String CAMERA_TEMP_PREFIX = "share-to-lens-";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private FrameLayout loadingOverlay;
     private ProgressBar pageProgress;
@@ -70,10 +76,16 @@ public final class MainActivity extends Activity {
     private String webUserAgent;
     private OnBackInvokedCallback backCallback;
     private boolean backCallbackRegistered;
+    private volatile boolean destroyed;
+    private volatile HttpURLConnection activeConnection;
+    private Uri pendingCameraUri;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            pendingCameraUri = savedInstanceState.getParcelable(KEY_PENDING_CAMERA_URI);
+        }
 
         Uri imageUri = findSharedImage(getIntent());
         if (imageUri == null) {
@@ -84,7 +96,16 @@ public final class MainActivity extends Activity {
         startUpload(new UriUploadSource(getContentResolver(), imageUri));
     }
 
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (pendingCameraUri != null) {
+            outState.putParcelable(KEY_PENDING_CAMERA_URI, pendingCameraUri);
+        }
+    }
+
     private void startUpload(UploadSource source) {
+        if (destroyed) return;
         setContentView(createBrowserUi());
         Log.d(TAG, "Starting upload");
         executor.execute(() -> uploadAndLoad(source));
@@ -94,13 +115,19 @@ public final class MainActivity extends Activity {
         try {
             String resultUrl = uploadToGoogle(source);
             Log.d(TAG, "Upload success. Loading results");
-            runOnUiThread(() -> webView.loadUrl(resultUrl, themeRequestHeaders()));
+            runOnUiThread(() -> {
+                if (destroyed || webView == null) return;
+                webView.loadUrl(resultUrl, themeRequestHeaders());
+            });
         } catch (Exception e) {
             Log.e(TAG, "Upload failed", e);
             runOnUiThread(() -> {
+                if (destroyed) return;
                 Toast.makeText(this, R.string.msg_error_generic, Toast.LENGTH_LONG).show();
                 finish();
             });
+        } finally {
+            source.cleanup();
         }
     }
 
@@ -160,11 +187,50 @@ public final class MainActivity extends Activity {
 
     @SuppressWarnings("deprecation")
     private void takePhoto() {
+        Uri imageUri;
+        try {
+            imageUri = createCameraImageUri();
+        } catch (Exception e) {
+            Log.e(TAG, "Could not create camera image", e);
+            Toast.makeText(this, R.string.msg_error_generic, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (imageUri == null) {
+            Toast.makeText(this, R.string.msg_error_generic, Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        pendingCameraUri = imageUri;
         Intent intent = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, imageUri);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        intent.setClipData(ClipData.newUri(getContentResolver(), "camera-output", imageUri));
+        grantCameraUriPermissions(intent, imageUri);
         try {
             startActivityForResult(intent, REQUEST_TAKE_PHOTO);
         } catch (ActivityNotFoundException e) {
+            revokeUriPermission(imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            deleteUri(imageUri);
+            pendingCameraUri = null;
             Toast.makeText(this, R.string.msg_error_no_camera, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private Uri createCameraImageUri() {
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, CAMERA_TEMP_PREFIX + System.currentTimeMillis() + ".jpg");
+        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+        return getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+    }
+
+    private void grantCameraUriPermissions(Intent intent, Uri uri) {
+        List<ResolveInfo> activities = getPackageManager().queryIntentActivities(intent, 0);
+        for (ResolveInfo activity : activities) {
+            grantUriPermission(
+                    activity.activityInfo.packageName,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            );
         }
     }
 
@@ -172,6 +238,24 @@ public final class MainActivity extends Activity {
     @SuppressWarnings({"deprecation", "UseCompatLoadingForDrawables"})
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_TAKE_PHOTO) {
+            Uri uri = pendingCameraUri;
+            pendingCameraUri = null;
+            if (uri == null) {
+                Toast.makeText(this, R.string.msg_error_generic, Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            boolean hasCapturedImage = resultCode == RESULT_OK || isUsableImage(uri);
+            if (!hasCapturedImage) {
+                revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                deleteUri(uri);
+                return;
+            }
+            startUpload(new UriUploadSource(getContentResolver(), uri, true));
+            return;
+        }
+
         if (resultCode != RESULT_OK) return;
 
         if (requestCode == REQUEST_PICK_IMAGE) {
@@ -183,24 +267,6 @@ public final class MainActivity extends Activity {
             startUpload(new UriUploadSource(getContentResolver(), uri));
             return;
         }
-
-        if (requestCode == REQUEST_TAKE_PHOTO) {
-            Bitmap bitmap = cameraBitmap(data);
-            if (bitmap == null) {
-                Toast.makeText(this, R.string.msg_error_generic, Toast.LENGTH_LONG).show();
-                return;
-            }
-            startUpload(new BitmapUploadSource(bitmap));
-        }
-    }
-
-    private static Bitmap cameraBitmap(Intent data) {
-        if (data == null || data.getExtras() == null) return null;
-        Object extra = data.getExtras().get("data");
-        if (extra instanceof Bitmap) {
-            return (Bitmap) extra;
-        }
-        return null;
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -228,7 +294,7 @@ public final class MainActivity extends Activity {
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
-        cookieManager.setAcceptThirdPartyCookies(webView, true);
+        cookieManager.setAcceptThirdPartyCookies(webView, false);
 
         webView.setWebViewClient(new LensWebViewClient());
         webView.setWebChromeClient(new WebChromeClient() {
@@ -394,45 +460,87 @@ public final class MainActivity extends Activity {
         String boundary = "ShareToLens-" + UUID.randomUUID();
         String uploadUrl = LENS_V3_URL + "?ep=ccm&re=df&st=" + System.currentTimeMillis();
 
-        HttpURLConnection conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
-        conn.setInstanceFollowRedirects(false);
-        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        conn.setReadTimeout(READ_TIMEOUT_MS);
-        conn.setDoOutput(true);
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-        conn.setRequestProperty("User-Agent", webUserAgent);
-        conn.setRequestProperty("X-Client-Side-Image-Upload", "true");
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
+            activeConnection = conn;
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
+            conn.setDoOutput(true);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            conn.setRequestProperty("User-Agent", webUserAgent);
+            conn.setRequestProperty("X-Client-Side-Image-Upload", "true");
 
-        try (
-                OutputStream out = new BufferedOutputStream(conn.getOutputStream());
-                InputStream in = source.openInputStream()
-        ) {
-            if (in == null) throw new IOException("Open fail");
-            
             ImageDimensions dimensions = source.dimensions();
-            writeField(out, boundary, "processed_image_dimensions", dimensions.width + "," + dimensions.height);
-            writeField(out, boundary, "sbisrc", "cr_1_0_0");
-            
-            writeAscii(out, "--" + boundary + "\r\n");
-            writeAscii(out, "Content-Disposition: form-data; name=\"encoded_image\"; filename=\"" + source.filename() + "\"\r\n");
-            writeAscii(out, "Content-Type: " + source.mimeType() + "\r\n\r\n");
-            
-            byte[] buf = new byte[16384];
-            int r;
-            while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
-            
-            writeAscii(out, "\r\n--" + boundary + "--\r\n");
+            byte[] fields = multipartFields(boundary, dimensions);
+            byte[] imageHeader = imageHeader(boundary, source);
+            byte[] closing = ascii("\r\n--" + boundary + "--\r\n");
+            long contentLength = source.contentLength();
+            if (contentLength >= 0) {
+                conn.setFixedLengthStreamingMode(fields.length + imageHeader.length + contentLength + closing.length);
+            } else {
+                conn.setChunkedStreamingMode(UPLOAD_BUFFER_SIZE);
+            }
+
+            try (
+                    OutputStream out = new BufferedOutputStream(conn.getOutputStream());
+                    InputStream in = source.openInputStream()
+            ) {
+                if (in == null) throw new IOException("Open fail");
+
+                out.write(fields);
+                out.write(imageHeader);
+
+                byte[] buf = new byte[UPLOAD_BUFFER_SIZE];
+                int r;
+                while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+
+                out.write(closing);
+            }
+
+            int code = conn.getResponseCode();
+            Log.d(TAG, "Upload response code: " + code);
+            syncCookies(conn);
+
+            String loc = conn.getHeaderField("Location");
+            if (loc == null) throw new IOException("No redirect. Code: " + code);
+
+            return validateLensRedirect(LENS_BASE_URI.resolve(loc)).toString();
+        } finally {
+            if (activeConnection == conn) {
+                activeConnection = null;
+            }
+            if (conn != null) {
+                conn.disconnect();
+            }
         }
+    }
 
-        int code = conn.getResponseCode();
-        Log.d(TAG, "Upload response code: " + code);
-        syncCookies(conn);
+    private static byte[] multipartFields(String boundary, ImageDimensions dimensions) {
+        String fields = field(boundary, "processed_image_dimensions", dimensions.width + "," + dimensions.height)
+                + field(boundary, "sbisrc", "cr_1_0_0");
+        return ascii(fields);
+    }
 
-        String loc = conn.getHeaderField("Location");
-        if (loc == null) throw new IOException("No redirect. Code: " + code);
-        
-        return URI.create("https://lens.google.com/").resolve(loc).toString();
+    private static String field(String boundary, String name, String value) {
+        return "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n"
+                + value + "\r\n";
+    }
+
+    private static byte[] imageHeader(String boundary, UploadSource source) {
+        return ascii("--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"encoded_image\"; filename=\"" + source.filename() + "\"\r\n"
+                + "Content-Type: " + source.mimeType() + "\r\n\r\n");
+    }
+
+    private static URI validateLensRedirect(URI uri) throws IOException {
+        if (!isAllowedWebUri(uri)) {
+            throw new IOException("Unexpected redirect: " + uri);
+        }
+        return uri;
     }
 
     private void syncCookies(HttpURLConnection conn) {
@@ -468,6 +576,23 @@ public final class MainActivity extends Activity {
         return new ImageDimensions(options.outWidth, options.outHeight);
     }
 
+    private boolean isUsableImage(Uri uri) {
+        try {
+            imageDimensions(getContentResolver(), uri);
+            return true;
+        } catch (IOException e) {
+            Log.w(TAG, "Camera did not return a usable image", e);
+            return false;
+        }
+    }
+
+    private static long contentLength(ContentResolver resolver, Uri imageUri) throws IOException {
+        try (AssetFileDescriptor fd = resolver.openAssetFileDescriptor(imageUri, "r")) {
+            if (fd == null) return -1;
+            return fd.getLength();
+        }
+    }
+
     private static String imageFilename(String mimeType) {
         String extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType);
         if (extension == null || extension.isEmpty()) {
@@ -476,14 +601,36 @@ public final class MainActivity extends Activity {
         return "image." + extension;
     }
 
-    private static void writeField(OutputStream out, String b, String name, String val) throws IOException {
-        writeAscii(out, "--" + b + "\r\n");
-        writeAscii(out, "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n");
-        writeAscii(out, val + "\r\n");
+    private void deleteUri(Uri uri) {
+        if (uri == null) return;
+        try {
+            getContentResolver().delete(uri, null, null);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not delete temporary image", e);
+        }
     }
 
-    private static void writeAscii(OutputStream out, String s) throws IOException {
-        out.write(s.getBytes(StandardCharsets.US_ASCII));
+    private static byte[] ascii(String s) {
+        return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static boolean isAllowedWebUri(Uri uri) {
+        if (uri == null) return false;
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        return isAllowedWebHost(scheme, host);
+    }
+
+    private static boolean isAllowedWebUri(URI uri) {
+        return isAllowedWebHost(uri.getScheme(), uri.getHost());
+    }
+
+    private static boolean isAllowedWebHost(String scheme, String host) {
+        if (!"https".equalsIgnoreCase(scheme) || host == null) return false;
+        String normalizedHost = host.toLowerCase(Locale.US);
+        return "lens.google.com".equals(normalizedHost)
+                || "www.google.com".equals(normalizedHost)
+                || "accounts.google.com".equals(normalizedHost);
     }
 
     private static final class ImageDimensions {
@@ -517,18 +664,29 @@ public final class MainActivity extends Activity {
 
         ImageDimensions dimensions() throws IOException;
 
+        long contentLength() throws IOException;
+
         InputStream openInputStream() throws IOException;
+
+        default void cleanup() {
+        }
     }
 
-    private static final class UriUploadSource implements UploadSource {
+    private final class UriUploadSource implements UploadSource {
         private final ContentResolver resolver;
         private final Uri uri;
         private final String mimeType;
+        private final boolean deleteAfterUpload;
 
         UriUploadSource(ContentResolver resolver, Uri uri) {
+            this(resolver, uri, false);
+        }
+
+        UriUploadSource(ContentResolver resolver, Uri uri, boolean deleteAfterUpload) {
             this.resolver = resolver;
             this.uri = uri;
             this.mimeType = imageMimeType(resolver, uri);
+            this.deleteAfterUpload = deleteAfterUpload;
         }
 
         @Override
@@ -547,40 +705,21 @@ public final class MainActivity extends Activity {
         }
 
         @Override
+        public long contentLength() throws IOException {
+            return MainActivity.contentLength(resolver, uri);
+        }
+
+        @Override
         public InputStream openInputStream() throws IOException {
             return resolver.openInputStream(uri);
         }
-    }
-
-    private static final class BitmapUploadSource implements UploadSource {
-        private final Bitmap bitmap;
-        private final byte[] bytes;
-
-        BitmapUploadSource(Bitmap bitmap) {
-            this.bitmap = bitmap;
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out);
-            bytes = out.toByteArray();
-        }
 
         @Override
-        public String mimeType() {
-            return "image/jpeg";
-        }
-
-        @Override
-        public String filename() {
-            return "camera.jpg";
-        }
-
-        @Override
-        public ImageDimensions dimensions() {
-            return new ImageDimensions(bitmap.getWidth(), bitmap.getHeight());
-        }
-
-        @Override
-        public InputStream openInputStream() {
-            return new ByteArrayInputStream(bytes);
+        public void cleanup() {
+            if (deleteAfterUpload) {
+                revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                deleteUri(uri);
+            }
         }
     }
 
@@ -600,8 +739,7 @@ public final class MainActivity extends Activity {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri uri = request.getUrl();
-            String scheme = uri.getScheme();
-            if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+            if (isAllowedWebUri(uri)) {
                 return false;
             }
             openExternal(uri);
@@ -703,6 +841,11 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
+        HttpURLConnection conn = activeConnection;
+        if (conn != null) {
+            conn.disconnect();
+        }
         super.onDestroy();
         unregisterBackCallback();
         clearPersistentWebViewData();

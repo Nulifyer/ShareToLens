@@ -8,3 +8,5 @@ captures/
 *.aab
 *.keystore
 app/build/
+results.html
+test_image.jpg
