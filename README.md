@@ -1,10 +1,10 @@
 # Share to Lens
 
-A tiny Android share target for sending an image to Google Lens in the browser.
+A tiny Android share target for sending an image to Google Lens in an in-app browser.
 
 The app does not depend on the Google app or the Google Lens app. When you share
 an image to **Share to Lens**, it uploads that image to the Google Lens web
-endpoint and opens the returned result page in your default browser.
+endpoint and opens the returned result page inside the app.
 
 ## Build
 
@@ -22,7 +22,7 @@ gradle assembleDebug
 1. Install the debug APK on your phone.
 2. Share an image from any app.
 3. Choose **Share to Lens**.
-4. Your browser opens with the Google Lens results.
+4. The app opens the Google Lens results in its WebView.
 
 ## Notes
 
