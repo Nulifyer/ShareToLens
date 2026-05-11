@@ -15,6 +15,7 @@ import android.os.Bundle;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.webkit.CookieManager;
@@ -24,6 +25,7 @@ import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
+import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -32,6 +34,8 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
@@ -51,6 +55,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+@SuppressWarnings("deprecation")
 public final class MainActivity extends Activity {
     private static final String TAG = "ShareToLens";
     private static final String LENS_V3_URL = "https://lens.google.com/v3/upload";
@@ -63,6 +68,8 @@ public final class MainActivity extends Activity {
     private ProgressBar pageProgress;
     private WebView webView;
     private String webUserAgent;
+    private OnBackInvokedCallback backCallback;
+    private boolean backCallbackRegistered;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -211,6 +218,11 @@ public final class MainActivity extends Activity {
         settings.setSupportZoom(true);
         settings.setBuiltInZoomControls(true);
         settings.setDisplayZoomControls(false);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setGeolocationEnabled(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         configureWebViewDarkMode(settings);
         webUserAgent = settings.getUserAgentString();
 
@@ -316,9 +328,7 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            settings.setForceDark(WebSettings.FORCE_DARK_OFF);
-        }
+        settings.setForceDark(WebSettings.FORCE_DARK_OFF);
     }
 
     private Map<String, String> themeRequestHeaders() {
@@ -333,6 +343,7 @@ public final class MainActivity extends Activity {
                 == Configuration.UI_MODE_NIGHT_YES;
     }
 
+    @SuppressWarnings("deprecation")
     private static SafeInsets safeInsets(WindowInsets insets) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.graphics.Insets safeInsets = insets.getInsets(
@@ -346,7 +357,7 @@ public final class MainActivity extends Activity {
         int right = insets.getSystemWindowInsetRight();
         int bottom = insets.getSystemWindowInsetBottom();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && insets.getDisplayCutout() != null) {
+        if (insets.getDisplayCutout() != null) {
             left = Math.max(left, insets.getDisplayCutout().getSafeInsetLeft());
             top = Math.max(top, insets.getDisplayCutout().getSafeInsetTop());
             right = Math.max(right, insets.getDisplayCutout().getSafeInsetRight());
@@ -583,6 +594,7 @@ public final class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             loadingOverlay.setVisibility(View.GONE);
             pageProgress.setVisibility(View.GONE);
+            updateBackCallback();
         }
 
         @Override
@@ -623,18 +635,77 @@ public final class MainActivity extends Activity {
     }
 
     @Override
-    @SuppressWarnings("deprecation")
-    public void onBackPressed() {
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                && keyCode == KeyEvent.KEYCODE_BACK
+                && webView != null
+                && webView.canGoBack()) {
+            webView.goBack();
+            return true;
+        }
+        return super.onKeyUp(keyCode, event);
+    }
+
+    private void handleBack() {
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
+            webView.post(this::updateBackCallback);
             return;
         }
-        super.onBackPressed();
+        unregisterBackCallback();
+        finish();
+    }
+
+    private void updateBackCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+
+        boolean shouldRegister = webView != null && webView.canGoBack();
+        if (shouldRegister && !backCallbackRegistered) {
+            if (backCallback == null) {
+                backCallback = this::handleBack;
+            }
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    backCallback
+            );
+            backCallbackRegistered = true;
+            return;
+        }
+
+        if (!shouldRegister) {
+            unregisterBackCallback();
+        }
+    }
+
+    private void unregisterBackCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || !backCallbackRegistered
+                || backCallback == null) {
+            return;
+        }
+        getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+        backCallbackRegistered = false;
+    }
+
+    private void clearPersistentWebViewData() {
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.removeAllCookies(value -> cookieManager.flush());
+
+        WebStorage.getInstance().deleteAllData();
+
+        if (webView == null) return;
+        webView.stopLoading();
+        webView.clearHistory();
+        webView.clearCache(true);
+        webView.clearFormData();
+        webView.clearSslPreferences();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        unregisterBackCallback();
+        clearPersistentWebViewData();
         if (webView != null) {
             webView.destroy();
             webView = null;

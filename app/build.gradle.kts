@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace = "dev.nulifyer.sharetolens"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "dev.nulifyer.sharetolens"
-        minSdk = 23
-        targetSdk = 35
+        minSdk = 29
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }

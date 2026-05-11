@@ -1,34 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="48dp"
-    android:height="48dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M0,0h108v108H0z" />
-    <path
-        android:fillColor="#4285F4"
-        android:pathData="M24,33c0,-5 4,-9 9,-9h15v8H33c-1,0 -1,0 -1,1v15h-8z" />
-    <path
-        android:fillColor="#EA4335"
-        android:pathData="M60,24h15c5,0 9,4 9,9v15h-8V33c0,-1 0,-1 -1,-1H60z" />
-    <path
-        android:fillColor="#FBBC04"
-        android:pathData="M84,60v15c0,5 -4,9 -9,9H60v-8h15c1,0 1,0 1,-1V60z" />
-    <path
-        android:fillColor="#34A853"
-        android:pathData="M48,84H33c-5,0 -9,-4 -9,-9V60h8v15c0,1 0,1 1,1h15z" />
-    <path
-        android:fillColor="#4285F4"
-        android:pathData="M54,42a12,12 0,1 0,0.1 0M54,50a4,4 0,1 1,0 8a4,4 0,0 1,0 -8" />
-    <path
-        android:fillColor="#34A853"
-        android:pathData="M39,50h8v8h-8z" />
-    <path
-        android:fillColor="#EA4335"
-        android:pathData="M61,50h8v8h-8z" />
-    <path
-        android:fillColor="#FBBC04"
-        android:pathData="M50,61h8v8h-8z" />
-</vector>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
