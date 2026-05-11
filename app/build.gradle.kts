@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.kyle.sharetolens"
+    namespace = "dev.nulifyer.sharetolens"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.kyle.sharetolens"
+        applicationId = "dev.nulifyer.sharetolens"
         minSdk = 23
         targetSdk = 35
         versionCode = 1

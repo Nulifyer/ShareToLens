@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Share to Lens</string>
+    <string name="msg_share_hint">Share an image here to search it with Google Lens.</string>
+    <string name="msg_uploading">Uploading image to Google Lens…</string>
+    <string name="msg_error_generic">Could not send this image to Google Lens.</string>
+    <string name="msg_opening">Opening Google Lens…</string>
+    <string name="msg_error_no_browser">No browser is available to open Google Lens.</string>
 </resources>
