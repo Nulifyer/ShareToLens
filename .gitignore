@@ -7,6 +7,9 @@ captures/
 *.apk
 *.aab
 *.keystore
+*.jks
+*.jks.base64
 app/build/
 results.html
 test_image.jpg
+.release/
