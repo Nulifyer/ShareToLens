@@ -24,6 +24,13 @@ gradle assembleDebug
 3. Choose **Share to Lens**.
 4. The app opens the Google Lens results in its WebView.
 
+You can also open **Share to Lens** directly, then pick an image or take a
+photo with Android's native UI. Camera captures use the in-memory camera
+preview returned by Android instead of writing a photo file for the app.
+
+The native app screens follow the system light/dark setting. On Android 12 and
+newer, they also use the system dynamic color palette.
+
 ## Notes
 
 - This uses Google's public Lens web upload flow, not an official Google Lens

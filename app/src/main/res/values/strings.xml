@@ -6,4 +6,8 @@
     <string name="msg_error_generic">Could not send this image to Google Lens.</string>
     <string name="msg_opening">Opening Google Lens…</string>
     <string name="msg_error_no_browser">No browser is available to open Google Lens.</string>
+    <string name="action_pick_image">Pick image</string>
+    <string name="action_take_photo">Take photo</string>
+    <string name="msg_error_no_picker">No image picker is available.</string>
+    <string name="msg_error_no_camera">No camera app is available.</string>
 </resources>
