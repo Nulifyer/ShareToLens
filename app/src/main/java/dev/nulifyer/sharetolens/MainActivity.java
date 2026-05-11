@@ -43,6 +43,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -86,7 +87,7 @@ public final class MainActivity extends Activity {
         try {
             String resultUrl = uploadToGoogle(source);
             Log.d(TAG, "Upload success. Loading results");
-            runOnUiThread(() -> webView.loadUrl(resultUrl));
+            runOnUiThread(() -> webView.loadUrl(resultUrl, themeRequestHeaders()));
         } catch (Exception e) {
             Log.e(TAG, "Upload failed", e);
             runOnUiThread(() -> {
@@ -310,17 +311,26 @@ public final class MainActivity extends Activity {
 
     @SuppressWarnings("deprecation")
     private void configureWebViewDarkMode(WebSettings settings) {
-        boolean darkMode = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                == Configuration.UI_MODE_NIGHT_YES;
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            settings.setAlgorithmicDarkeningAllowed(darkMode);
+            settings.setAlgorithmicDarkeningAllowed(false);
             return;
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            settings.setForceDark(darkMode ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+            settings.setForceDark(WebSettings.FORCE_DARK_OFF);
         }
+    }
+
+    private Map<String, String> themeRequestHeaders() {
+        return Collections.singletonMap(
+                "Sec-CH-Prefers-Color-Scheme",
+                isSystemDarkMode() ? "dark" : "light"
+        );
+    }
+
+    private boolean isSystemDarkMode() {
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
     }
 
     private static SafeInsets safeInsets(WindowInsets insets) {
