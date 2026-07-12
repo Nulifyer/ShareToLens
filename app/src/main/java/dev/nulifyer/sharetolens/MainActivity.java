@@ -72,12 +72,15 @@ public final class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private FrameLayout loadingOverlay;
     private ProgressBar pageProgress;
+    private ProgressBar uploadProgress;
+    private TextView uploadMessage;
     private WebView webView;
     private String webUserAgent;
     private OnBackInvokedCallback backCallback;
     private boolean backCallbackRegistered;
     private volatile boolean destroyed;
     private volatile HttpURLConnection activeConnection;
+    private volatile LensUploadClient activeUploader;
     private Uri pendingCameraUri;
 
     @Override
@@ -108,27 +111,63 @@ public final class MainActivity extends Activity {
         if (destroyed) return;
         setContentView(createBrowserUi());
         Log.d(TAG, "Starting upload");
-        executor.execute(() -> uploadAndLoad(source));
+        executor.execute(() -> prepareUploadAndLoad(source));
     }
 
-    private void uploadAndLoad(UploadSource source) {
-        try {
-            String resultUrl = uploadToGoogle(source);
+    private void prepareUploadAndLoad(UploadSource source) {
+        LensUploadClient uploader = new LensUploadClient();
+        activeUploader = uploader;
+        try (ImagePreprocessor.PreparedImage image = ImagePreprocessor.prepare(
+                getContentResolver(), source.uri(), getCacheDir(), this::isUploadCancelled)) {
+            showUploadProgress(0);
+            LensUploadClient.Result result = uploader.upload(image, webUserAgent, new LensUploadClient.Listener() {
+                @Override public void onProgress(int percent) { showUploadProgress(percent); }
+                @Override public void onRetry(int nextAttempt, int maxAttempts) {
+                    runOnUiThread(() -> {
+                        if (isUploadCancelled() || uploadMessage == null) return;
+                        uploadMessage.setText(getString(R.string.msg_retrying, nextAttempt, maxAttempts));
+                        uploadProgress.setIndeterminate(true);
+                    });
+                }
+            });
+            syncCookies(result.cookies);
             Log.d(TAG, "Upload success. Loading results");
             runOnUiThread(() -> {
                 if (destroyed || webView == null) return;
-                webView.loadUrl(resultUrl, themeRequestHeaders());
+                webView.loadUrl(result.url, themeRequestHeaders());
             });
+        } catch (UploadCancelledException e) {
+            Log.d(TAG, "Upload cancelled");
         } catch (Exception e) {
             Log.e(TAG, "Upload failed", e);
             runOnUiThread(() -> {
-                if (destroyed) return;
+                if (isUploadCancelled()) return;
                 Toast.makeText(this, R.string.msg_error_generic, Toast.LENGTH_LONG).show();
                 finish();
             });
         } finally {
+            if (activeUploader == uploader) activeUploader = null;
             source.cleanup();
         }
+    }
+
+    private boolean isUploadCancelled() {
+        return destroyed || Thread.currentThread().isInterrupted();
+    }
+
+    private void showUploadProgress(int percent) {
+        runOnUiThread(() -> {
+            if (isUploadCancelled() || uploadProgress == null || uploadMessage == null) return;
+            uploadProgress.setIndeterminate(false);
+            uploadProgress.setProgress(percent);
+            uploadMessage.setText(getString(R.string.msg_upload_progress, percent));
+        });
+    }
+
+    private void cancelUpload() {
+        LensUploadClient uploader = activeUploader;
+        if (uploader != null) uploader.cancel();
+        finish();
     }
 
     private View createStartUi() {
@@ -284,7 +323,7 @@ public final class MainActivity extends Activity {
         settings.setSupportZoom(true);
         settings.setBuiltInZoomControls(true);
         settings.setDisplayZoomControls(false);
-        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setGeolocationEnabled(false);
@@ -338,18 +377,29 @@ public final class MainActivity extends Activity {
         int padding = (int) (24 * getResources().getDisplayMetrics().density);
         content.setPadding(padding, padding, padding, padding);
 
-        ProgressBar spinner = new ProgressBar(this, null, android.R.attr.progressBarStyleLarge);
-        content.addView(spinner);
+        uploadProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        uploadProgress.setIndeterminate(true);
+        uploadProgress.setMax(100);
+        content.addView(uploadProgress, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
 
-        TextView message = new TextView(this);
-        message.setText(R.string.msg_uploading);
-        message.setGravity(Gravity.CENTER);
+        uploadMessage = new TextView(this);
+        uploadMessage.setText(R.string.msg_preparing);
+        uploadMessage.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams messageParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
         messageParams.topMargin = (int) (16 * getResources().getDisplayMetrics().density);
-        content.addView(message, messageParams);
+        content.addView(uploadMessage, messageParams);
+
+        Button cancel = new Button(this);
+        cancel.setText(R.string.action_cancel);
+        cancel.setAllCaps(false);
+        cancel.setOnClickListener(v -> cancelUpload());
+        content.addView(cancel, buttonLayoutParams());
 
         overlay.addView(content, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -555,6 +605,12 @@ public final class MainActivity extends Activity {
         cookieManager.flush();
     }
 
+    private void syncCookies(List<String> cookies) {
+        CookieManager cookieManager = CookieManager.getInstance();
+        for (String cookie : cookies) cookieManager.setCookie("https://lens.google.com", cookie);
+        cookieManager.flush();
+    }
+
     private static String imageMimeType(ContentResolver resolver, Uri imageUri) {
         String mimeType = resolver.getType(imageUri);
         if (mimeType == null || !mimeType.toLowerCase(Locale.US).startsWith("image/")) {
@@ -658,6 +714,8 @@ public final class MainActivity extends Activity {
     }
 
     private interface UploadSource {
+        Uri uri();
+
         String mimeType();
 
         String filename();
@@ -687,6 +745,11 @@ public final class MainActivity extends Activity {
             this.uri = uri;
             this.mimeType = imageMimeType(resolver, uri);
             this.deleteAfterUpload = deleteAfterUpload;
+        }
+
+        @Override
+        public Uri uri() {
+            return uri;
         }
 
         @Override
@@ -842,6 +905,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        LensUploadClient uploader = activeUploader;
+        if (uploader != null) uploader.cancel();
         HttpURLConnection conn = activeConnection;
         if (conn != null) {
             conn.disconnect();

@@ -3,6 +3,10 @@
     <string name="app_name">Share to Lens</string>
     <string name="msg_share_hint">Share an image here to search it with Google Lens.</string>
     <string name="msg_uploading">Uploading image to Google Lens…</string>
+    <string name="msg_preparing">Preparing image…</string>
+    <string name="msg_upload_progress">Uploading image… %1$d%%</string>
+    <string name="msg_retrying">Connection interrupted. Retrying (%1$d/%2$d)…</string>
+    <string name="action_cancel">Cancel</string>
     <string name="msg_error_generic">Could not send this image to Google Lens.</string>
     <string name="msg_error_no_browser">No browser is available to open Google Lens.</string>
     <string name="action_pick_image">Pick image</string>
