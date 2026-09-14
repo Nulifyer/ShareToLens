@@ -108,7 +108,10 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
           cp app/build/outputs/apk/release/app-release.apk "release-assets/${APK_NAME}"
-          sha256sum "release-assets/${APK_NAME}" > "release-assets/${APK_NAME}.sha256"
+          (
+            cd release-assets
+            sha256sum "${APK_NAME}" > "${APK_NAME}.sha256"
+          )
 
       - name: Verify APK signature
         run: |
