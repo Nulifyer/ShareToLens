@@ -6,8 +6,9 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
-import android.media.ExifInterface;
 import android.net.Uri;
+
+import androidx.exifinterface.media.ExifInterface;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -19,9 +20,37 @@ import java.util.function.BooleanSupplier;
 final class ImagePreprocessor {
     static final int MAX_EDGE = 2048;
     static final int JPEG_QUALITY = 85;
+    static final long MAX_SOURCE_BYTES = 25L * 1024L * 1024L;
     private static final int BUFFER_SIZE = 64 * 1024;
+    private static final long STALE_FILE_AGE_MS = 6L * 60L * 60L * 1000L;
+    private static final String[] TEMP_FILE_PREFIXES = {"lens-source-", "lens-upload-"};
 
     private ImagePreprocessor() {}
+
+    static void cleanStaleFiles(File cacheDir) {
+        long staleBefore = System.currentTimeMillis() - STALE_FILE_AGE_MS;
+        File[] files = cacheDir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                for (String prefix : TEMP_FILE_PREFIXES) {
+                    if (file.isFile() && file.lastModified() < staleBefore
+                            && file.getName().startsWith(prefix)) {
+                        file.delete();
+                        break;
+                    }
+                }
+            }
+        }
+
+        File cameraDir = new File(cacheDir, "camera");
+        File[] cameraFiles = cameraDir.listFiles();
+        if (cameraFiles != null) {
+            for (File file : cameraFiles) {
+                if (file.isFile() && file.lastModified() < staleBefore
+                        && file.getName().startsWith("lens-camera-")) file.delete();
+            }
+        }
+    }
 
     static PreparedImage prepare(ContentResolver resolver, Uri uri, File cacheDir,
                                  BooleanSupplier cancelled) throws IOException {
@@ -72,8 +101,13 @@ final class ImagePreprocessor {
             if (in == null) throw new IOException("Could not open image");
             byte[] buffer = new byte[BUFFER_SIZE];
             int read;
+            long copied = 0;
             while ((read = in.read(buffer)) != -1) {
                 checkCancelled(cancelled);
+                copied += read;
+                if (copied > MAX_SOURCE_BYTES) {
+                    throw new InputTooLargeException();
+                }
                 out.write(buffer, 0, read);
             }
         }
@@ -142,5 +176,11 @@ final class ImagePreprocessor {
         }
 
         @Override public void close() { file.delete(); }
+    }
+
+    static final class InputTooLargeException extends IOException {
+        InputTooLargeException() {
+            super("Image is larger than the 25 MB input limit");
+        }
     }
 }

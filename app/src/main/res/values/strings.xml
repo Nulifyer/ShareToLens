@@ -1,16 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Share to Lens</string>
-    <string name="msg_share_hint">Share an image here to search it with Google Lens.</string>
-    <string name="msg_uploading">Uploading image to Google Lens…</string>
-    <string name="msg_preparing">Preparing image…</string>
-    <string name="msg_upload_progress">Uploading image… %1$d%%</string>
-    <string name="msg_retrying">Connection interrupted. Retrying (%1$d/%2$d)…</string>
+    <string name="title_ready">Search any image with Lens</string>
+    <string name="body_ready">Choose a photo, take one, or share an image from any app.</string>
+    <string name="privacy_note">Processed on this device. File metadata is removed before upload.</string>
+    <string name="title_initializing">Starting Share to Lens</string>
+    <string name="body_initializing">Clearing the previous browser session…</string>
+    <string name="title_preparing">Preparing your image</string>
+    <string name="body_preparing">Resizing it and removing location and camera metadata.</string>
+    <string name="title_uploading">Sending to Google Lens</string>
+    <string name="body_uploading">Uploading the processed image. Nothing is added to your photo library.</string>
+    <string name="title_retrying">Reconnecting</string>
+    <string name="body_retrying">Retry %1$d of %2$d</string>
+    <string name="title_upload_error">Couldn\'t reach Google Lens</string>
+    <string name="body_upload_error">Check your connection and try again. Share to Lens has not saved your image.</string>
+    <string name="title_image_too_large">Image is too large</string>
+    <string name="body_image_too_large">Choose an image smaller than 25 MB. The original has not been uploaded.</string>
+    <string name="title_browser_error">Lens couldn\'t load this page</string>
+    <string name="body_browser_error">Check your connection or open a new search.</string>
+    <string name="title_results">Lens results</string>
+    <string name="progress_percent">%1$d%%</string>
+    <string name="focus_mark_description">Share to Lens focus mark</string>
     <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="action_close_results">Close results</string>
+    <string name="action_back_to_chooser">Back to choose a photo</string>
+    <string name="action_choose_photo">Choose a photo</string>
+    <string name="action_take_photo">Take a photo</string>
+    <string name="action_try_again">Try again</string>
+    <string name="action_choose_another">Choose another photo</string>
+    <string name="action_reload_page">Reload page</string>
+    <string name="action_new_search">New search</string>
     <string name="msg_error_generic">Could not send this image to Google Lens.</string>
-    <string name="msg_error_no_browser">No browser is available to open Google Lens.</string>
-    <string name="action_pick_image">Pick image</string>
-    <string name="action_take_photo">Take photo</string>
+    <string name="msg_error_no_browser">No browser is available to open this link.</string>
     <string name="msg_error_no_picker">No image picker is available.</string>
     <string name="msg_error_no_camera">No camera app is available.</string>
+    <string name="msg_error_camera_image">The camera did not return a usable photo.</string>
 </resources>
